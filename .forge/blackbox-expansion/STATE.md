@@ -20,10 +20,10 @@ Reviewer: U = Ultimate, P = Performance. Tier: E = Efficient, P = Performance.
 | BBX-1-10 wizard endpoint | committed | P | 2 | U: clean (pool run-state is live check) | (wave 2 merge) |
 
 ## Wave 3
-| BBX-1-07 budget loop | pending | P | 3 | — | — |
-| BBX-1-08 resolver proc | pending | P | 3 | — | — |
-| BBX-1-09 benchmark gate | pending | P | 3 | — | — |
-| BBX-1-12 wizard picker | pending | P | 3 | — | — |
+| BBX-1-07 budget loop | committed | P | 3 | U: HIGH CPU-unit + MED false-gap fixed (r1); race + reader-late fixed (r2, atomic effective) | (wave 3 + fix r1/r2) |
+| BBX-1-08 resolver proc | committed | P | 3 | U: LOW Start==0 cache fixed (r1) | (wave 3 + fix r1) |
+| BBX-1-09 benchmark gate | committed | P | 3 | U: clean (0.335ms/tick, 86 allocs) | (wave 3) |
+| BBX-1-12 wizard picker | committed | P | 3 | U: clean (1-line wizard mode prop + scn1 guards accepted) | (wave 3) |
 
 ## Wave 4
 | BBX-1-11 resolver map | pending | P | 4 | — | — |
@@ -85,3 +85,4 @@ Reviewer: U = Ultimate, P = Performance. Tier: E = Efficient, P = Performance.
 - 2026-11-13: subagents created in .qoder/agents. NOTE: this session's Agent tool only exposes general-purpose/Explore/Plan; custom types not dispatchable and /agents reload not available as a tool. Dispatch uses general-purpose with the tier prompt embedded; per-dispatch model tier cannot be forced from here (agent files carry the intended tier for CLI use).
 - 2026-11-13: Wave 1 (1-01..1-04) implemented in worktrees, merged, Ultimate batch review found 1 HIGH (budget slow-group livelock) + 1 LOW; fix round applied (NoteSkipped + GroupTiming optional flag), re-review confirmed resolved. Committed 06add92. CounterReading rename propagated to packets 1-06/1-09; NoteSkipped wiring added to 1-05.
 - 2026-11-13: Wave 2 (1-05,1-06,1-10) implemented, merged, integration tests green. Ultimate review found 1 CRITICAL: PdhExpandWildCardPathW called with 4 args (missing dwFlags) → nondeterministic wildcard expansion. Fixed (5th arg 0 at pdh_windows.go:99,107); all PDH call arities re-verified against Win32 signatures; build/vet/tests pass.
+- 2026-11-13: Wave 3 (1-07,1-08,1-09,1-12) implemented, merged. Ultimate review found HIGH (CPU self-throttle divided by cores → budget never fires) + MED (widening fabricates running-late/false gaps) + LOW (resolver Start==0 cache) + missing 1-07 report. Fix r1 applied; re-review confirmed but flagged a NEW data race (EffectiveInterval read from HTTP goroutines) + offline-reader false-late. Fix r2: atomic.Int64 effective interval + manifest EffectiveIntervalSeconds used by DeriveState. All blackbox tests pass. -race not runnable here (no gcc); recommend owner runs -race on a CGO host. Server-suite FAIL confirmed pre-existing flake (TestAsyncImportCommitsInTheBackground, fails on pristine tree).
