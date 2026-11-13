@@ -32,10 +32,10 @@ Reviewer: U = Ultimate, P = Performance. Tier: E = Efficient, P = Performance.
 | BBX-2-04 SQL host counters | committed | P | 4 | U: MED bRefresh 2nd call fixed; Windows enum wired; dedup pdhDetailWizard | (wave 4 + fix) |
 
 ## Wave 5
-| BBX-2-02 IIS worker | pending | P | 5 | — | — |
-| BBX-3-01 CLR | pending | P | 5 | — | — |
-| BBX-3-02 .NET10 fallback | pending | P | 5 | — | — |
-| BBX-3-03 per-proc I/O | pending | P | 5 | — | — |
+| BBX-2-02 IIS worker | committed | P | 5 | U: MED out-of-process match + paren parsing fixed | (wave 5 + fix) |
+| BBX-3-01 CLR | committed | P | 5 | U: LOW no-target footprint fixed | (wave 5 + fix) |
+| BBX-3-02 .NET10 fallback | committed | P | 5 | U: paren parsing + no-target footprint fixed | (wave 5 + fix) |
+| BBX-3-03 per-proc I/O | committed | P | 5 | U: paren parsing + no-target footprint fixed | (wave 5 + fix) |
 
 ## Wave 6
 | BBX-4-01 event log | pending | P | 6 | — | — |
@@ -87,3 +87,4 @@ Reviewer: U = Ultimate, P = Performance. Tier: E = Efficient, P = Performance.
 - 2026-11-13: Wave 2 (1-05,1-06,1-10) implemented, merged, integration tests green. Ultimate review found 1 CRITICAL: PdhExpandWildCardPathW called with 4 args (missing dwFlags) → nondeterministic wildcard expansion. Fixed (5th arg 0 at pdh_windows.go:99,107); all PDH call arities re-verified against Win32 signatures; build/vet/tests pass.
 - 2026-11-13: Wave 3 (1-07,1-08,1-09,1-12) implemented, merged. Ultimate review found HIGH (CPU self-throttle divided by cores → budget never fires) + MED (widening fabricates running-late/false gaps) + LOW (resolver Start==0 cache) + missing 1-07 report. Fix r1 applied; re-review confirmed but flagged a NEW data race (EffectiveInterval read from HTTP goroutines) + offline-reader false-late. Fix r2: atomic.Int64 effective interval + manifest EffectiveIntervalSeconds used by DeriveState. All blackbox tests pass. -race not runnable here (no gcc); recommend owner runs -race on a CGO host. Server-suite FAIL confirmed pre-existing flake (TestAsyncImportCommitsInTheBackground, fails on pristine tree).
 - 2026-11-14: Wave 4 (1-11,2-01,2-03,2-04) implemented, merged. 2-03 blocked by pre-existing clumsy_test race (real-PDH group widens window) → test-only stabilization (processed-tick barrier in hostRig). 2-04 Windows PDH object enumeration wired (sqlhost_windows.go). Integration caught pdhDetailWizard redeclaration (parallel worktrees) → deduped. Ultimate review found HIGH (all-or-nothing pool/service cache) + HIGH (W3WP PDH cache never refreshed → stale on recycle) + MED (sqlhost 2nd PdhEnumObjects bRefresh) + wiring gap (resolver never called in host.go). All fixed (independent caches, refresh-before-items, processChangeGate wiring, bRefresh=0); re-review confirmed; suite ×3 green.
+- 2026-11-14: Wave 5 (2-02,3-01,3-02,3-03 per-process groups) implemented, merged; suite ×3 green in isolation. Ultimate review found MED (IIS misses out-of-process .NET10 pools — matched retargeted child PID not w3wp) + LOW-MED (instance parsing drops names with ')') + LOW (clr/proc10/procIO sample machine-wide with no targets). Fixed: IIS matches by pool name (reports w3wp PID), ')\ ' parsing in iis/proc10/procIO, no-target short-circuit. Tests added (out-of-process, paren, no-target-zero-collect). NOTE: pre-existing load-sensitive clumsy listen-timeout flake (TestClumsyWrongReadKeyIsRefusedEveryWay) appears only under parallel test load, passes in isolation.
