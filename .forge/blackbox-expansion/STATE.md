@@ -26,10 +26,10 @@ Reviewer: U = Ultimate, P = Performance. Tier: E = Efficient, P = Performance.
 | BBX-1-12 wizard picker | committed | P | 3 | U: clean (1-line wizard mode prop + scn1 guards accepted) | (wave 3) |
 
 ## Wave 4
-| BBX-1-11 resolver map | pending | P | 4 | — | — |
-| BBX-2-01 HTTP.sys | pending | P | 4 | — | — |
-| BBX-2-03 disk+CPU | pending | P | 4 | — | — |
-| BBX-2-04 SQL host counters | pending | P | 4 | — | — |
+| BBX-1-11 resolver map | committed | P | 4 | U: HIGH all-or-nothing cache + HIGH stale PDH cache + wiring gap fixed; re-reviewed OK | (wave 4 + fix) |
+| BBX-2-01 HTTP.sys | committed | P | 4 | U: clean | (wave 4) |
+| BBX-2-03 disk+CPU | committed | P | 4 | U: clean; pre-existing clumsy test race stabilized (test-only) | (wave 4) |
+| BBX-2-04 SQL host counters | committed | P | 4 | U: MED bRefresh 2nd call fixed; Windows enum wired; dedup pdhDetailWizard | (wave 4 + fix) |
 
 ## Wave 5
 | BBX-2-02 IIS worker | pending | P | 5 | — | — |
@@ -86,3 +86,4 @@ Reviewer: U = Ultimate, P = Performance. Tier: E = Efficient, P = Performance.
 - 2026-11-13: Wave 1 (1-01..1-04) implemented in worktrees, merged, Ultimate batch review found 1 HIGH (budget slow-group livelock) + 1 LOW; fix round applied (NoteSkipped + GroupTiming optional flag), re-review confirmed resolved. Committed 06add92. CounterReading rename propagated to packets 1-06/1-09; NoteSkipped wiring added to 1-05.
 - 2026-11-13: Wave 2 (1-05,1-06,1-10) implemented, merged, integration tests green. Ultimate review found 1 CRITICAL: PdhExpandWildCardPathW called with 4 args (missing dwFlags) → nondeterministic wildcard expansion. Fixed (5th arg 0 at pdh_windows.go:99,107); all PDH call arities re-verified against Win32 signatures; build/vet/tests pass.
 - 2026-11-13: Wave 3 (1-07,1-08,1-09,1-12) implemented, merged. Ultimate review found HIGH (CPU self-throttle divided by cores → budget never fires) + MED (widening fabricates running-late/false gaps) + LOW (resolver Start==0 cache) + missing 1-07 report. Fix r1 applied; re-review confirmed but flagged a NEW data race (EffectiveInterval read from HTTP goroutines) + offline-reader false-late. Fix r2: atomic.Int64 effective interval + manifest EffectiveIntervalSeconds used by DeriveState. All blackbox tests pass. -race not runnable here (no gcc); recommend owner runs -race on a CGO host. Server-suite FAIL confirmed pre-existing flake (TestAsyncImportCommitsInTheBackground, fails on pristine tree).
+- 2026-11-14: Wave 4 (1-11,2-01,2-03,2-04) implemented, merged. 2-03 blocked by pre-existing clumsy_test race (real-PDH group widens window) → test-only stabilization (processed-tick barrier in hostRig). 2-04 Windows PDH object enumeration wired (sqlhost_windows.go). Integration caught pdhDetailWizard redeclaration (parallel worktrees) → deduped. Ultimate review found HIGH (all-or-nothing pool/service cache) + HIGH (W3WP PDH cache never refreshed → stale on recycle) + MED (sqlhost 2nd PdhEnumObjects bRefresh) + wiring gap (resolver never called in host.go). All fixed (independent caches, refresh-before-items, processChangeGate wiring, bRefresh=0); re-review confirmed; suite ×3 green.
