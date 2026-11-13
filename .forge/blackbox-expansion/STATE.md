@@ -38,11 +38,11 @@ Reviewer: U = Ultimate, P = Performance. Tier: E = Efficient, P = Performance.
 | BBX-3-03 per-proc I/O | committed | P | 5 | U: paren parsing + no-target footprint fixed | (wave 5 + fix) |
 
 ## Wave 6
-| BBX-4-01 event log | pending | P | 6 | — | — |
-| BBX-4-02 TCP | pending | P | 6 | — | — |
-| BBX-4-03 ASP.NET | pending | E | 6 | — | — |
-| BBX-4-04 mem pressure | pending | E | 6 | — | — |
-| BBX-4-05 busiest shape | pending | P | 6 | — | — |
+| BBX-4-01 event log | committed | P | 6 | U: clean (IDs/numbers only) | (wave 6) |
+| BBX-4-02 TCP | committed | P | 6 | U: HIGH resets cumulative→KindRate fixed | (wave 6 + fix) |
+| BBX-4-03 ASP.NET | committed | E | 6 | U: clean (RequestsRejected kind = live check) | (wave 6) |
+| BBX-4-04 mem pressure | committed | E | 6 | U: clean | (wave 6) |
+| BBX-4-05 busiest shape | committed | P | 6 | U: clean; Step 9 finds w3wp (server suite green) | (wave 6) |
 
 ## Wave 7 (SQL 5a)
 | BBX-5-01 SQL service+DACL | pending | P | 7 | — | — |
@@ -88,3 +88,4 @@ Reviewer: U = Ultimate, P = Performance. Tier: E = Efficient, P = Performance.
 - 2026-11-13: Wave 3 (1-07,1-08,1-09,1-12) implemented, merged. Ultimate review found HIGH (CPU self-throttle divided by cores → budget never fires) + MED (widening fabricates running-late/false gaps) + LOW (resolver Start==0 cache) + missing 1-07 report. Fix r1 applied; re-review confirmed but flagged a NEW data race (EffectiveInterval read from HTTP goroutines) + offline-reader false-late. Fix r2: atomic.Int64 effective interval + manifest EffectiveIntervalSeconds used by DeriveState. All blackbox tests pass. -race not runnable here (no gcc); recommend owner runs -race on a CGO host. Server-suite FAIL confirmed pre-existing flake (TestAsyncImportCommitsInTheBackground, fails on pristine tree).
 - 2026-11-14: Wave 4 (1-11,2-01,2-03,2-04) implemented, merged. 2-03 blocked by pre-existing clumsy_test race (real-PDH group widens window) → test-only stabilization (processed-tick barrier in hostRig). 2-04 Windows PDH object enumeration wired (sqlhost_windows.go). Integration caught pdhDetailWizard redeclaration (parallel worktrees) → deduped. Ultimate review found HIGH (all-or-nothing pool/service cache) + HIGH (W3WP PDH cache never refreshed → stale on recycle) + MED (sqlhost 2nd PdhEnumObjects bRefresh) + wiring gap (resolver never called in host.go). All fixed (independent caches, refresh-before-items, processChangeGate wiring, bRefresh=0); re-review confirmed; suite ×3 green.
 - 2026-11-14: Wave 5 (2-02,3-01,3-02,3-03 per-process groups) implemented, merged; suite ×3 green in isolation. Ultimate review found MED (IIS misses out-of-process .NET10 pools — matched retargeted child PID not w3wp) + LOW-MED (instance parsing drops names with ')') + LOW (clr/proc10/procIO sample machine-wide with no targets). Fixed: IIS matches by pool name (reports w3wp PID), ')\ ' parsing in iis/proc10/procIO, no-target short-circuit. Tests added (out-of-process, paren, no-target-zero-collect). NOTE: pre-existing load-sensitive clumsy listen-timeout flake (TestClumsyWrongReadKeyIsRefusedEveryWay) appears only under parallel test load, passes in isolation.
+- 2026-11-14: User requested all subagents use model Qwen4-max-preview; set model field in all 4 .qoder/agents files. LIMITATION disclosed: this session's Agent tool has no per-dispatch model param and only dispatches general-purpose/Explore/Plan; the running subagents' model is governed by the app selector (user must select it there). Wave 6 (4-01 events,4-02 tcp,4-03 aspnet,4-04 mempressure,4-05 busiest) implemented, merged; suite ×3 green. 4-05 interrupted then completed (Step 9 finds w3wp, server suite green). Ultimate review found HIGH (TCP Connections Reset is cumulative but KindPDHRate emitted gated totals) → fixed to KindRate (true delta rate, reset-guarded). ASP.NET RequestsRejected kind flagged for live check (object absent on dev box).
