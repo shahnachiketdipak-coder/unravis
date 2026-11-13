@@ -13,10 +13,6 @@ import (
 // the object-enumeration proc is new (same pattern as pdh_windows.go).
 var procPdhEnumObjects = pdh.NewProc("PdhEnumObjectsW")
 
-// pdhDetailWizard is PERF_DETAIL_WIZARD: enumerate every object, including
-// expert-level ones, so no SQL instance object is filtered out.
-const pdhDetailWizard = 400
-
 // sqlEnumPDHObjectsPlatform enumerates the local machine's PDH object names via
 // PdhEnumObjectsW (lazy pdh.dll). It is the Windows default of the discovery
 // seam in sqlhost.go; off Windows the twin in sqlhost_other.go reports no PDH
