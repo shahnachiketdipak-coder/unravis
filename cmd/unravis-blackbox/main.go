@@ -42,7 +42,8 @@ Commands that change the service (run as administrator):
               Prints the read key once. Options: --name --folder --port --bind
   start       Start the service.
   stop        Stop the service. The current run is closed cleanly.
-  apply       Read blackbox.json again and restart the service.
+  apply       Save the settings to the installed blackbox.json and restart
+              the service. A stopped service keeps them for its next start.
   remove      Stop and remove the service. The recordings stay.
               --delete-recordings --confirm-name <name>  also deletes them.
   install-sql Install and start the SQL service (UnravisBlackboxSql) under its
@@ -144,10 +145,13 @@ func (a answer) ok(text string, fields map[string]any) int {
 func (a answer) fail(err error) int {
 	reason := "other"
 	var ie *blackbox.InstallError
+	var ae *blackbox.ApplyError
 	var se *blackbox.SnapshotError
 	switch {
 	case errors.As(err, &ie):
 		reason = string(ie.Reason)
+	case errors.As(err, &ae):
+		reason = string(ae.Reason)
 	case errors.As(err, &se):
 		reason = string(se.Reason)
 	case errors.Is(err, blackbox.ErrNotAdmin):

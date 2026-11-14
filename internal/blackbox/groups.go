@@ -21,7 +21,13 @@ type ResolvedTarget struct {
 }
 
 // GroupDeps carries what a group factory needs. RunHost wires Targets (nil
-// when no targets are selected) and ProcessSetChanged from the Resolver.
+// when no targets are selected) and the monotonic inventory Generation from the
+// Resolver. ProcessSetChanged keeps its func() bool signature for current
+// callers; when Generation is set, BuildGroups derives a per-group
+// ProcessSetChanged from it (dirty until that group successfully reconciles the
+// newest generation), so a skipped or failed group never loses a change
+// (W3-03). A caller that supplies only ProcessSetChanged keeps the shared
+// edge-triggered behaviour.
 type GroupDeps struct {
 	Source            CounterSource
 	Engine            *Engine
@@ -29,6 +35,10 @@ type GroupDeps struct {
 	Config            Config
 	Cores             int
 	ProcessSetChanged func() bool
+	// Generation is the current monotonic inventory generation. Optional; when
+	// set, BuildGroups tracks each group's last successfully reconciled
+	// generation and acknowledges only on a successful Collect.
+	Generation func() uint64
 }
 
 // Group is one counter group, collected serially within the per-group budget.
@@ -77,22 +87,97 @@ func BuildGroups(d GroupDeps) []Group {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	// With a monotonic generation source, give each group its own dirty/ack
+	// state: a group is dirty until it SUCCESSFULLY reconciles the newest
+	// generation, so a budget skip or a failed refresh retains the change and
+	// the group catches up on resume without a second process change (W3-03).
+	var tracker *changeTracker
+	if d.Generation != nil {
+		tracker = &changeTracker{current: d.Generation, acked: make(map[string]uint64)}
+	}
 	var groups []Group
 	for _, name := range names {
-		g, err := regs[name].factory(d)
+		gd := d
+		if tracker != nil {
+			groupName := name
+			gd.ProcessSetChanged = func() bool { return tracker.dirty(groupName) }
+		}
+		g, err := regs[name].factory(gd)
+		var built Group
 		switch {
 		case errors.Is(err, errNoTargets):
 			continue
 		case err != nil:
-			groups = append(groups, &lazyGroup{
+			built = &lazyGroup{
 				name: name, optional: regs[name].optional,
-				factory: regs[name].factory, deps: d,
-			})
+				factory: regs[name].factory, deps: gd,
+			}
 		default:
-			groups = append(groups, g)
+			built = g
 		}
+		if tracker != nil {
+			built = &trackedGroup{name: name, tracker: tracker, inner: built}
+		}
+		groups = append(groups, built)
 	}
 	return groups
+}
+
+// changeTracker publishes the monotonic inventory generation and records each
+// group's last successfully reconciled generation. A group is dirty while the
+// current generation is newer than its ack; a skipped or failed group never
+// acks, so it stays dirty and catches up on resume (W3-03). The mutex makes it
+// safe for a late worker from an earlier tick to ack while the tick goroutine
+// runs another group.
+type changeTracker struct {
+	mu      sync.Mutex
+	current func() uint64
+	acked   map[string]uint64
+}
+
+func (c *changeTracker) dirty(name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.current() > c.acked[name]
+}
+
+func (c *changeTracker) ack(name string, gen uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if gen > c.acked[name] {
+		c.acked[name] = gen
+	}
+}
+
+// trackedGroup acknowledges the generation a group reconciled, but ONLY when
+// its Collect succeeds. The generation is captured before Collect so a late
+// worker acks the generation it actually saw, never a newer one it missed. A
+// failed refresh, a panic, a skip or a busy slot leaves the ack untouched, so
+// the change stays pending. Name/Optional/Close delegate, preserving the
+// workerSlot deadline and the close-a-busy-source guard.
+type trackedGroup struct {
+	name    string
+	tracker *changeTracker
+	inner   Group
+}
+
+func (t *trackedGroup) Name() string   { return t.name }
+func (t *trackedGroup) Optional() bool { return t.inner.Optional() }
+
+func (t *trackedGroup) Collect(now time.Time, dt float64) (any, error) {
+	gen := t.tracker.current()
+	v, err := t.inner.Collect(now, dt)
+	if err == nil {
+		t.tracker.ack(t.name, gen)
+	}
+	return v, err
+}
+
+func (t *trackedGroup) Close() error {
+	if cl, ok := t.inner.(io.Closer); ok {
+		return cl.Close()
+	}
+	return nil
 }
 
 // groupRetryMax caps the retry backoff for an unavailable group.
