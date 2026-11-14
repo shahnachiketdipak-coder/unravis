@@ -166,6 +166,10 @@ type Runner struct {
 	// proved. It drives connExpired.
 	connectedAt time.Time
 	rotated     string // hour last swept, so rotation costs one readdir per hour
+	// stateDirty is true when the authoritative state could not be persisted. It
+	// is retried even while auto-off, so a failed save cannot be forgotten across
+	// a restart (W10-04).
+	stateDirty bool
 }
 
 // NewRunner loads the persisted back-off state. A corrupt or unreadable state
@@ -249,6 +253,13 @@ func (r *Runner) Tick(now time.Time) error {
 	defer func() { r.running = false }()
 
 	if r.state.AutoOff {
+		// A latch that never reached disk is not a latch: keep trying to persist
+		// it even though sampling is off.
+		if r.stateDirty {
+			if err := r.persist(); err == nil {
+				return nil
+			}
+		}
 		return r.writeStatus()
 	}
 
@@ -316,7 +327,7 @@ func (r *Runner) Tick(now time.Time) error {
 	if hadSuccess {
 		r.state.OnSuccess()
 	}
-	return r.saveAndStatus()
+	return r.persist()
 }
 
 // due reports whether a sampler's own interval has elapsed under the current
@@ -385,9 +396,28 @@ func (r *Runner) fail(err error) error {
 	perm := e.Code == CodePermission || e.Code == CodeLoginFailed || e.Code == CodeTooManyRights
 	r.state.OnFailure(perm, e.Code == CodeTooManyRights)
 	r.dropConn()
-	_ = r.saveAndStatus()
+	if err := r.persist(); err != nil {
+		// The denial is in memory but not on disk. Say so with a fixed code and
+		// keep the dirty flag so the next tick retries; never report a durable
+		// latch that was not written.
+		r.logf("tick: %s", codeStateSave)
+	}
 	r.logf("tick: %s", e.Code)
 	return e
+}
+
+// codeStateSave is the fixed log token for a state write that did not land.
+const codeStateSave = "state-save"
+
+// persist writes the authoritative state and the status file, tracking whether
+// the state actually reached disk.
+func (r *Runner) persist() error {
+	if err := r.saveAndStatus(); err != nil {
+		r.stateDirty = true
+		return err
+	}
+	r.stateDirty = false
+	return nil
 }
 
 func (r *Runner) saveAndStatus() error {
