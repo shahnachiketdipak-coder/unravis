@@ -100,8 +100,11 @@ func parseHTTPPath(path string) (pool, field string, kind CounterKind, ok bool) 
 		return "", "", 0, false
 	}
 	rest := path[len(httpQueuePrefix):]
-	end := strings.IndexByte(rest, ')')
-	if end < 0 || !strings.HasPrefix(rest[end+1:], `\`) {
+	// The instance ends at ")\", not at the first ')': a pool name may itself
+	// contain parentheses (W4-05), and config validation allows them. Splitting
+	// at the first ')' silently dropped every such queue.
+	end := strings.Index(rest, `)\`)
+	if end < 0 {
 		return "", "", 0, false
 	}
 	pool, counter := rest[:end], rest[end+2:]
