@@ -87,9 +87,11 @@ func (g *proc10Group) rebuild(paths []string) {
 		if !ok {
 			continue
 		}
-		specs = append(specs, CounterSpec{Path: p, Field: inst + "\x00" + counter, Kind: kind})
+		// Volatile: PDH names Process instances by enumeration order, so the same
+		// name can mean another process after a refresh.
+		specs = append(specs, CounterSpec{Path: p, Field: inst + "\x00" + counter, Kind: kind, Volatile: true})
 	}
-	g.engine = NewEngine(specs, g.cores)
+	g.engine = reconcileEngine(g.engine, specs, g.cores)
 }
 
 // refresh re-expands the wildcards on the same query handle — only when the

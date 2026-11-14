@@ -100,11 +100,13 @@ func (g *clrGroup) rebuild(paths []string) {
 			continue
 		}
 		key := inst + "\x00" + counter
-		specs = append(specs, CounterSpec{Path: path, Field: key, Kind: kind})
+		// Volatile: a CLR instance name is a process label PDH can rebind to
+		// another process, so it must not carry a baseline across a refresh.
+		specs = append(specs, CounterSpec{Path: path, Field: key, Kind: kind, Volatile: true})
 		counters = append(counters, clrCounter{key: key, inst: inst, field: counter})
 	}
 	g.counters = counters
-	g.engine = NewEngine(specs, g.cores)
+	g.engine = reconcileEngine(g.engine, specs, g.cores)
 }
 
 // parseCLRPath extracts the instance and matches the counter suffix.

@@ -97,7 +97,9 @@ func (g *tcpGroup) rebuild(paths []string) {
 			}
 		}
 	}
-	g.eng = NewEngine(specs, g.cores)
+	// Interface names and the TCPv4/v6 objects are stable identities: keep their
+	// baselines when an unrelated process changes.
+	g.eng = reconcileEngine(g.eng, specs, g.cores)
 }
 
 // upgrade swaps in a source that also expands the Network Interface wildcard.

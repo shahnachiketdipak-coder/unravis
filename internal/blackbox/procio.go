@@ -115,11 +115,12 @@ func (g *procIOGroup) rebuild(paths []string) {
 			continue
 		}
 		key := inst + "\x00" + counter
-		specs = append(specs, CounterSpec{Path: path, Field: key, Kind: kind})
+		// Volatile: a Process instance name is not a process identity.
+		specs = append(specs, CounterSpec{Path: path, Field: key, Kind: kind, Volatile: true})
 		counters = append(counters, procIOCounter{key: key, inst: inst, field: counter})
 	}
 	g.counters = counters
-	g.engine = NewEngine(specs, g.cores)
+	g.engine = reconcileEngine(g.engine, specs, g.cores)
 }
 
 // refresh re-expands the wildcards on the same query handle — only when the

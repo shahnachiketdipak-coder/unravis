@@ -88,7 +88,9 @@ func (g *httpGroup) rebuild(paths []string) {
 		counters = append(counters, httpCounter{key: key, pool: pool, field: field})
 	}
 	g.counters = counters
-	g.engine = NewEngine(specs, g.cores)
+	// A queue belongs to an app pool, not to a process: the pool name is a stable
+	// identity, so an unchanged queue keeps its rate baseline across a refresh.
+	g.engine = reconcileEngine(g.engine, specs, g.cores)
 }
 
 // parseHTTPPath extracts the pool (the instance between the parentheses)
