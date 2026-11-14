@@ -28,11 +28,25 @@ const (
 	// row counts a healthy instance actually returns.
 	budgetMeanLineCap      = 2048
 	budgetRealTickBytesCap = 16 << 10
+	// The mean is C13's wording, but a mean hides one fat group, so the LARGEST
+	// line is bounded too. The realistic max is set by the biggest group a
+	// healthy instance fills (filestats at 40 files), so this bound is a trip
+	// wire for "a row cap was raised", not a claim that every line is under
+	// 2 KB - see the owner decision in the BBX-5-10 report: a 40-file realistic
+	// group is already ~4.5 KB, so "2 KB per sample" only holds per average
+	// sample, never per group at realistic counts.
+	budgetRealMaxLineCap = 8 << 10
 	// The AT-CAP tier is a storage-planning figure, not a claim about a normal
 	// server: it is the largest tick the pinned row caps permit. It is bounded
 	// so a cap raise cannot silently multiply hourly growth.
 	budgetAtCapTickBytesCap = 64 << 10
+	budgetAtCapMaxLineCap   = 40 << 10
 	budgetAtCapTicks        = 4
+	// C13's memory bound: the working set must not grow by 10 MB of steady
+	// sampling. Measured as real RSS growth, because bytes allocated per tick
+	// says nothing about what the service holds (maps, baselines, buffers).
+	budgetMemoryTicks           = 60
+	budgetWorkingSetGrowthCapMB = 10
 )
 
 // budgetSampler is a local double; the name is distinct from every other test
@@ -382,6 +396,9 @@ func TestSQLBudget(t *testing.T) {
 	if stats.meanLine >= budgetMeanLineCap {
 		t.Errorf("mean sample line = %d bytes, want < %d (C13: under 2 KB per sample)", stats.meanLine, budgetMeanLineCap)
 	}
+	if stats.maxLine >= budgetRealMaxLineCap {
+		t.Errorf("largest sample line = %d bytes, want < %d (one group cannot outgrow the mean)", stats.maxLine, budgetRealMaxLineCap)
+	}
 	if stats.meanTick >= budgetRealTickBytesCap {
 		t.Errorf("mean tick writes %d bytes, want < %d", stats.meanTick, budgetRealTickBytesCap)
 	}
@@ -437,6 +454,9 @@ func TestSQLBudgetAtCapPayload(t *testing.T) {
 	if stats.worstTick >= budgetAtCapTickBytesCap {
 		t.Errorf("at-cap tick writes %d bytes, want < %d", stats.worstTick, budgetAtCapTickBytesCap)
 	}
+	if stats.maxLine >= budgetAtCapMaxLineCap {
+		t.Errorf("at-cap largest sample line = %d bytes, want < %d (a row cap was raised?)", stats.maxLine, budgetAtCapMaxLineCap)
+	}
 	for _, sp := range samplers {
 		for _, n := range stats.perKindRows[sp.kind] {
 			if n > sp.limit {
@@ -448,6 +468,38 @@ func TestSQLBudgetAtCapPayload(t *testing.T) {
 	perDay := stats.worstTick * 240 * 24
 	t.Logf("at-cap storage plan: %d B/tick -> %d B/day at 15s cadence (retention: %d hours)",
 		stats.worstTick, perDay, r.keepHours())
+}
+
+// TestSQLBudgetWorkingSet is the C13 memory bound measured as real RSS, not as
+// bytes allocated per tick: the sampler keeps per-file and per-wait baselines
+// between ticks, and an allocation counter would pass while the service grew
+// the map every cycle. The bound is on the GROWTH across many ticks, because a
+// process's baseline working set is the Go runtime, not this code.
+func TestSQLBudgetWorkingSet(t *testing.T) {
+	before, ok := budgetWorkingSetBytes(t)
+	if !ok {
+		t.Skip("psapi working-set reading unavailable on this platform")
+	}
+	r := newBudgetRunner(t, realisticCounts(), nil)
+	now := time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)
+	r.Now = func() time.Time { return now }
+	for i := 0; i < budgetMemoryTicks; i++ {
+		if err := r.Tick(now); err != nil {
+			t.Fatalf("tick %d: %v", i, err)
+		}
+		now = now.Add(BaseInterval)
+	}
+	runtime.GC()
+	after, ok := budgetWorkingSetBytes(t)
+	if !ok {
+		t.Skip("psapi working-set reading unavailable on this platform")
+	}
+	growth := after - before
+	const cap = budgetWorkingSetGrowthCapMB << 20
+	t.Logf("working set: %d -> %d bytes over %d ticks (growth %d, cap %d)", before, after, budgetMemoryTicks, growth, cap)
+	if growth >= cap {
+		t.Errorf("sampling grew the working set by %d bytes, want < %d (C13: under 10 MB extra memory)", growth, cap)
+	}
 }
 
 func TestSQLBudgetNoGoroutineGrowth(t *testing.T) {

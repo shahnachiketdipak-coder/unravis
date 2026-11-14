@@ -141,10 +141,15 @@ type Runner struct {
 	// KeepHours bounds the sample files; 0 means defaultKeepHours.
 	KeepHours int
 	// MinFreePercent is the owner's free-space floor for the drive holding Dir.
-	// FreePercent reads it; with no reader installed the check is unavailable
-	// and the tick runs, because the host recorder holds the real gate.
+	// FreePercent reads it. With no reader installed the floor cannot be checked
+	// at all, so the caller must install one: the SQL service is its own process,
+	// and the host recorder's housekeeping never looks inside \sql.
 	MinFreePercent int
 	FreePercent    func(path string) (float64, error)
+	// MaxBytes is the C13 byte bound of the whole sample folder. Age retention
+	// alone does not bound it: the measured worst case is ~340 MB a day. 0 means
+	// no byte bound (tests); the service always sets one from the owner's config.
+	MaxBytes int64
 
 	state     State
 	samplers  []Sampler
@@ -155,7 +160,10 @@ type Runner struct {
 	q         Queryer
 	closeConn func() error
 	connected bool
-	rotated   string // hour last swept, so rotation costs one readdir per hour
+	// connectedAt is when the live connection was opened and its ceiling
+	// proved. It drives connExpired.
+	connectedAt time.Time
+	rotated     string // hour last swept, so rotation costs one readdir per hour
 }
 
 // NewRunner loads the persisted back-off state. A corrupt or unreadable state
@@ -210,6 +218,7 @@ func (r *Runner) dropConn() {
 	r.closeConn = nil
 	r.q = nil
 	r.connected = false
+	r.connectedAt = time.Time{}
 }
 
 // StatusPath is the C11 status file inside the SQL data folder.
@@ -224,7 +233,14 @@ func SamplePath(dir string, t time.Time) string {
 // skipped and counted: ticks never queue and never overlap (C4).
 func (r *Runner) Tick(now time.Time) error {
 	if r.running {
+		// C4: ticks never queue. Run() drives ticks in one goroutine, so this
+		// only fires for an external driver - but it is the control that keeps
+		// a hung tick from being followed by a pile of new ones, so it is
+		// counted and logged rather than silently absorbed. The counter cannot
+		// reach /status (C11 fixes those four fields), so the log is the only
+		// surface it has.
 		r.skipped++
+		r.logf("tick: skipped, previous tick still running (%d so far)", r.skipped)
 		return nil
 	}
 	r.running = true
@@ -243,7 +259,7 @@ func (r *Runner) Tick(now time.Time) error {
 		r.logf("tick: %s", CodeDiskLow)
 		return err
 	}
-	if !r.connected {
+	if !r.connected || r.connExpired(now) {
 		if err := r.reconnect(ctx); err != nil {
 			return err
 		}
@@ -308,16 +324,30 @@ func (r *Runner) due(s Sampler, now time.Time) bool {
 	return !ok || now.Sub(lr) >= max(r.state.Interval, s.Interval())
 }
 
+// connExpired reports whether the live connection has outlived C5's lifetime.
+// database/sql retires the physical connection silently at that point (and
+// after any transport error), so "the ceiling is checked at every connect" is
+// only true if the runner notices the same moment: a login given sysadmin an
+// hour later must not keep sampling on an unproven connection.
+func (r *Runner) connExpired(now time.Time) bool {
+	return r.connected && !r.connectedAt.IsZero() && now.Sub(r.connectedAt) >= ConnMaxLifetime
+}
+
 // reconnect opens the connection and runs the C8 ceiling check before anything
 // else is sent. Rights can change while the service runs, so both happen at
-// every connect and no sample is taken on an unproven connection.
+// every connect and no sample is taken on an unproven connection. An existing
+// connection is closed first: the service holds exactly one (C5).
 func (r *Runner) reconnect(ctx context.Context) error {
+	if r.connected {
+		r.dropConn()
+	}
 	q, closeFn, err := r.connectFn()(r.Conn)
 	if err != nil {
 		return r.fail(err)
 	}
 	r.q, r.closeConn, r.connected = q, closeFn, true
-	if err := CheckCeiling(r.q); err != nil {
+	r.connectedAt = r.now()
+	if err := CheckCeiling(ctx, r.q); err != nil {
 		return r.fail(err)
 	}
 	return nil
@@ -370,7 +400,10 @@ func (r *Runner) saveAndStatus() error {
 func (r *Runner) checkDisk(now time.Time) error {
 	if r.FreePercent != nil && r.MinFreePercent > 0 {
 		free, err := r.FreePercent(r.Dir)
-		if err == nil && free < float64(r.MinFreePercent) {
+		// An unreadable volume is treated as "no room": the floor exists to
+		// protect the operator's disk, and a reading that cannot be taken
+		// cannot prove there is one. Writing anyway would fail open.
+		if err != nil || free < float64(r.MinFreePercent) {
 			return errDiskLow
 		}
 	}
@@ -378,31 +411,73 @@ func (r *Runner) checkDisk(now time.Time) error {
 	if hour == r.rotated {
 		return nil
 	}
+	// The hour is only marked as swept once the sweep succeeded: a failed
+	// rotation must be retried on the next tick, or one unreadable entry would
+	// leave the folder unbounded for the rest of the hour with no signal. The
+	// error handed back is a fixed code, because a raw os error names the
+	// folder path (C10).
+	if err := r.rotate(now.UTC()); err != nil {
+		return errDiskSweep
+	}
 	r.rotated = hour
-	return r.rotate(now.UTC())
+	return nil
 }
 
-// rotate deletes sample files whose name-hour is older than the retention
-// window. A name that does not parse as an hour is left alone rather than
-// guessed at, so an unrelated file can never be swept by accident.
+// errDiskSweep is the fixed code for "the sample folder could not be swept",
+// which means the retention bound is not being enforced.
+var errDiskSweep = &Error{CodeDiskLow, "The SQL sample folder could not be swept, so its retention bound is not enforced."}
+
+// rotate enforces both bounds of the SQL folder: the age window (keepHours) and
+// the byte cap (MaxBytes). Sample files are named by the hour they hold, and
+// os.ReadDir returns names in sorted order, so the oldest hour is always the
+// first entry and the newest is the last. A name that does not parse as an hour
+// is left alone rather than guessed at, so an unrelated file can never be
+// swept by accident, and the newest hour is never dropped by the byte cap: a
+// reader must always find the file the service is writing into.
 func (r *Runner) rotate(now time.Time) error {
 	entries, err := os.ReadDir(r.Dir)
 	if err != nil {
 		return err
 	}
 	cutoff := now.Add(-time.Duration(r.keepHours()) * time.Hour).Format(hourLayout)
+	type sampleFile struct {
+		name string
+		size int64
+	}
+	var kept []sampleFile
+	var total int64
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasPrefix(name, "bb-sql-") || !strings.HasSuffix(name, ".ndjson") {
 			continue
 		}
 		hh := strings.TrimSuffix(strings.TrimPrefix(name, "bb-sql-"), ".ndjson")
-		if !validHour(hh) || hh >= cutoff {
+		if !validHour(hh) {
 			continue
 		}
-		if err := os.Remove(filepath.Join(r.Dir, name)); err != nil && !os.IsNotExist(err) {
+		if hh < cutoff {
+			if err := os.Remove(filepath.Join(r.Dir, name)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
 			return err
 		}
+		kept = append(kept, sampleFile{name: name, size: info.Size()})
+		total += info.Size()
+	}
+	// Retention by age does not bound the folder: the measured worst case is
+	// ~340 MB a day, so 168 hours of it is ~2.4 GB. With MaxBytes set, whole
+	// hours go from the oldest end until the folder fits. Dropping a whole hour
+	// is honest: the hour is simply missing, never zero-filled.
+	for r.MaxBytes > 0 && total > r.MaxBytes && len(kept) > 1 {
+		if err := os.Remove(filepath.Join(r.Dir, kept[0].name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		total -= kept[0].size
+		kept = kept[1:]
 	}
 	return nil
 }
