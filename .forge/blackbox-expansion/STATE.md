@@ -45,10 +45,10 @@ Reviewer: U = Ultimate, P = Performance. Tier: E = Efficient, P = Performance.
 | BBX-4-05 busiest shape | committed | P | 6 | U: clean; Step 9 finds w3wp (server suite green) | (wave 6) |
 
 ## Wave 7 (SQL 5a)
-| BBX-5-01 SQL service+DACL | pending | P | 7 | — | — |
-| BBX-5-03 recorder codes | pending | P | 7 | — | — |
-| BBX-5-05 allowlist+lint | pending | P | 7 | — | — |
-| BBX-5-08 back-off | pending | P | 7 | — | — |
+| BBX-5-01 SQL service+DACL | committed | P | 7 | U gate: SID/SDDL/account verified vs real SCM; clean | (wave 7) |
+| BBX-5-03 recorder codes | committed | P | 7 | U gate: HIGH store.go:422 C10 leak fixed (+test) | (wave 7 + fix) |
+| BBX-5-05 allowlist+lint | committed | P | 7 | U gate: C1/C2 lint SOUND; columns compliant | (wave 7) |
+| BBX-5-08 back-off | committed | P | 7 | U gate: C7 fully met; fails closed | (wave 7) |
 
 ## Wave 8
 | BBX-5-02 SQL CLI+grant | pending | P | 8 | — | — |
@@ -89,3 +89,4 @@ Reviewer: U = Ultimate, P = Performance. Tier: E = Efficient, P = Performance.
 - 2026-11-14: Wave 4 (1-11,2-01,2-03,2-04) implemented, merged. 2-03 blocked by pre-existing clumsy_test race (real-PDH group widens window) → test-only stabilization (processed-tick barrier in hostRig). 2-04 Windows PDH object enumeration wired (sqlhost_windows.go). Integration caught pdhDetailWizard redeclaration (parallel worktrees) → deduped. Ultimate review found HIGH (all-or-nothing pool/service cache) + HIGH (W3WP PDH cache never refreshed → stale on recycle) + MED (sqlhost 2nd PdhEnumObjects bRefresh) + wiring gap (resolver never called in host.go). All fixed (independent caches, refresh-before-items, processChangeGate wiring, bRefresh=0); re-review confirmed; suite ×3 green.
 - 2026-11-14: Wave 5 (2-02,3-01,3-02,3-03 per-process groups) implemented, merged; suite ×3 green in isolation. Ultimate review found MED (IIS misses out-of-process .NET10 pools — matched retargeted child PID not w3wp) + LOW-MED (instance parsing drops names with ')') + LOW (clr/proc10/procIO sample machine-wide with no targets). Fixed: IIS matches by pool name (reports w3wp PID), ')\ ' parsing in iis/proc10/procIO, no-target short-circuit. Tests added (out-of-process, paren, no-target-zero-collect). NOTE: pre-existing load-sensitive clumsy listen-timeout flake (TestClumsyWrongReadKeyIsRefusedEveryWay) appears only under parallel test load, passes in isolation.
 - 2026-11-14: User requested all subagents use model Qwen4-max-preview; set model field in all 4 .qoder/agents files. LIMITATION disclosed: this session's Agent tool has no per-dispatch model param and only dispatches general-purpose/Explore/Plan; the running subagents' model is governed by the app selector (user must select it there). Wave 6 (4-01 events,4-02 tcp,4-03 aspnet,4-04 mempressure,4-05 busiest) implemented, merged; suite ×3 green. 4-05 interrupted then completed (Step 9 finds w3wp, server suite green). Ultimate review found HIGH (TCP Connections Reset is cumulative but KindPDHRate emitted gated totals) → fixed to KindRate (true delta rate, reset-guarded). ASP.NET RequestsRejected kind flagged for live check (object absent on dev box).
+- 2026-11-14: Wave 7 (SQL 5a: 5-01 service+DACL, 5-03 recorder codes, 5-05 allowlist+lint, 5-08 back-off) implemented, merged. Ultimate SQL gate: SID independently recomputed (matches sc.exe showsid), SDDL = 3 ACEs no Users/Everyone, host account unchanged, C1/C2 lint judged SOUND, C7 met. Found HIGH C10 leak (store.go:422 wrote path+err.Error() into shipped event) → fixed to fixed code + fallback-branch test. Pinned 3 integration hazards into downstream packets: 5-09/5-11 empty wait type → sentinel RUNNING (no regex loosening); 5-09 FileStats needs SizeOnDiskBytes; 5-02 must wire blackbox.WinService directly (setup adapter drops Account).
