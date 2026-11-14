@@ -12,7 +12,7 @@ const setPrefix = "SET NOCOUNT ON; SET LOCK_TIMEOUT 1000; SET DEADLOCK_PRIORITY 
 // excluded. The self-join identifies head blockers (a blocker that is not
 // itself blocked) without a second SELECT. Only counts/ms/wait type are output.
 // TOP 256 is the C6 cap in SQL (defense in depth; the reader stops at 257).
-const stmtRequests = setPrefix + `SELECT TOP 256 ISNULL(r.wait_type, N'') AS wait_type,
+const stmtRequests = setPrefix + `SELECT TOP 257 ISNULL(r.wait_type, N'') AS wait_type,
   COUNT(*) AS tasks,
   MAX(r.wait_time) AS max_wait_ms,
   SUM(CASE WHEN r.blocking_session_id > 0 THEN 1 ELSE 0 END) AS blocked,
@@ -24,9 +24,11 @@ WHERE r.session_id <> @@SPID
 GROUP BY ISNULL(r.wait_type, N'')
 ORDER BY COUNT(*) DESC /* unravis:bb:requests */`
 
-// bb:waits (BL-102): top 20 cumulative waits, benign waits filtered. The filter
+// bb:waits (BL-102): top 20 cumulative waits, benign waits filtered. SQL fetches
+// 21 so the reader can SEE the 21st row and mark the sample truncated; only 20
+// are ever kept (W8-05). The filter
 // LIST is reused from internal/dbhealth/sql.go:101-112 (no query-text code).
-const stmtWaits = setPrefix + `SELECT TOP 20 wait_type, wait_time_ms, waiting_tasks_count
+const stmtWaits = setPrefix + `SELECT TOP 21 wait_type, wait_time_ms, waiting_tasks_count
 FROM sys.dm_os_wait_stats
 WHERE wait_time_ms > 0
   AND wait_type NOT LIKE N'SLEEP%' AND wait_type NOT LIKE N'XE%' AND wait_type NOT LIKE N'BROKER%' AND wait_type NOT LIKE N'HADR%'
@@ -49,7 +51,7 @@ WHERE status = N'VISIBLE ONLINE' /* unravis:bb:schedulers */`
 // The DMV column is timeout_error_count; it is aliased to timeout_count so the
 // fixed output mapping is unchanged. sys.dm_exec_requests likewise exposes
 // wait_time (ms), not wait_time_ms - that name belongs to dm_os_wait_stats.
-const stmtSemaphores = setPrefix + `SELECT TOP 16 resource_semaphore_id, grantee_count, waiter_count, forced_grant_count, timeout_error_count AS timeout_count
+const stmtSemaphores = setPrefix + `SELECT TOP 17 resource_semaphore_id, grantee_count, waiter_count, forced_grant_count, timeout_error_count AS timeout_count
 FROM sys.dm_exec_query_resource_semaphores
 ORDER BY resource_semaphore_id /* unravis:bb:semaphores */`
 
@@ -60,14 +62,14 @@ FROM sys.dm_db_session_space_usage /* unravis:bb:tempdb */`
 
 // bb:filestats (BL-119): per-file I/O stalls, ids only (no sys.master_files join,
 // no paths/names); deltas computed in Go.
-const stmtFilestats = setPrefix + `SELECT TOP 256 database_id, file_id, io_stall_read_ms, io_stall_write_ms, num_of_reads, num_of_writes, size_on_disk_bytes
+const stmtFilestats = setPrefix + `SELECT TOP 257 database_id, file_id, io_stall_read_ms, io_stall_write_ms, num_of_reads, num_of_writes, size_on_disk_bytes
 FROM sys.dm_io_virtual_file_stats(NULL, NULL)
 ORDER BY database_id, file_id /* unravis:bb:filestats */`
 
 // bb:ag (BL-119): AG database replica state, gated by IsHadrEnabled in Go. No
 // sys.availability_replicas and no replica server names; ids/enum only.
 // TOP 64 is the C6 cap in SQL (defense in depth; the reader stops at 65).
-const stmtAG = setPrefix + `SELECT TOP 64 database_id, synchronization_state
+const stmtAG = setPrefix + `SELECT TOP 65 database_id, synchronization_state
 FROM sys.dm_hadr_database_replica_states
 ORDER BY database_id /* unravis:bb:ag */`
 

@@ -14,17 +14,18 @@ import (
 	"regexp"
 )
 
-// C6 per-kind row caps. Every row-returning statement carries TOP n in SQL
-// (defense in depth); the reader stops at n+1 and decodeRows keeps n and
-// marks truncated. Never dbhealth's 5000 cap.
+// C6 per-kind row caps: the number of rows KEPT. Each sample statement fetches
+// TOP n+1 in SQL so the extra row is a real truncation witness; the reader stops
+// at n+1 and decodeRows keeps n and marks truncated. With TOP n the witness could
+// never arrive and an over-cap result looked complete. Never dbhealth's 5000 cap.
 const (
-	CapRequests   = 256 // TOP 256 in bb:requests
-	CapWaits      = 20  // TOP 20 in bb:waits
+	CapRequests   = 256 // bb:requests fetches TOP 257, keeps 256
+	CapWaits      = 20  // bb:waits fetches TOP 21, keeps 20
 	CapSchedulers = 1   // summed in SQL
-	CapSemaphores = 16  // TOP 16 in bb:semaphores
+	CapSemaphores = 16  // bb:semaphores fetches TOP 17, keeps 16
 	CapTempdb     = 1   // summed in SQL
-	CapFileStats  = 256 // TOP 256 in bb:filestats
-	CapAG         = 64  // TOP 64 in bb:ag
+	CapFileStats  = 256 // bb:filestats fetches TOP 257, keeps 256
+	CapAG         = 64  // bb:ag fetches TOP 65, keeps 64
 	// CapCeilingPerms mirrors the TOP 2 in bb:ceiling_perms: two permissions
 	// outside the ceiling are already a refusal, so the query never needs to
 	// report more, and the reader must not silently stop below what is sent.
@@ -39,8 +40,8 @@ const (
 
 // statementCap maps an allowlisted statement to its C6 row cap. Unknown text
 // gets the smallest cap (fail closed); the send gates only pass known text.
-// TestEveryStatementHasItsOwnRowCap proves this table agrees with the TOP n
-// written into each statement.
+// TestEveryStatementHasItsOwnRowCap proves this table agrees with the TOP n+1
+// written into each sample statement (TOP n for the control statements).
 func statementCap(text string) int {
 	switch text {
 	case stmtRequests:
