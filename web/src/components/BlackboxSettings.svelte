@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { INTERVALS, blackboxApi, listensOnAll, toggleTarget, type Settings, type SettingsProblem, type TargetInfo, type TargetKind, type TargetRef } from '../lib/blackbox';
+  import { INTERVALS, blackboxApi, listensOnAll, toggleTarget, type Settings, type SettingsProblem, type TargetInfo, type TargetKind, type TargetRef, targetRunState } from '../lib/blackbox';
   import { BB_TEXT as T } from '../lib/copy/blackboxCopy';
 
   // The settings fields of a Blackbox, shared by the Place wizard (part 3) and Apply settings on this PC.
@@ -12,7 +12,8 @@
   const invalid = (key: SettingsProblem) => (problem === key ? 'true' : undefined);
   const described = (key: SettingsProblem, help: string) => idPrefix + '-' + help + (problem === key ? ' ' + idPrefix + '-' + key + '-error' : '');
 
-  // Targets (BBX-1-12): only kind+name is ever stored. A target that is not running says "not running", never 0.
+  // Targets (BBX-1-12): only kind+name is ever stored. A stopped target says "not running";
+  // one whose state could not be read says so, and is never labelled stopped (W2-07).
   let appPools = $state<TargetInfo[]>([]);
   let services = $state<TargetInfo[]>([]);
   let detected = $state(false);
@@ -83,13 +84,13 @@
     <fieldset class="bb-checks">
       <legend>{T.targetsAppPools}</legend>
       {#each appPools as t (t.name)}
-        <label class="bb-check"><input type="checkbox" checked={isSelected('appPool', t.name)} onchange={() => pick('appPool', t.name)} /><span>{t.name}{#if !t.running} <span class="bb-note">{T.targetsNotRunning}</span>{/if}</span></label>
+        <label class="bb-check"><input type="checkbox" checked={isSelected('appPool', t.name)} onchange={() => pick('appPool', t.name)} /><span>{t.name}{#if targetRunState(t) === 'stopped'} <span class="bb-note">{T.targetsNotRunning}</span>{:else if targetRunState(t) === 'unknown'} <span class="bb-note">{T.targetsStateUnknown}</span>{/if}</span></label>
       {/each}
     </fieldset>
     <fieldset class="bb-checks">
       <legend>{T.targetsServices}</legend>
       {#each services as t (t.name)}
-        <label class="bb-check"><input type="checkbox" checked={isSelected('service', t.name)} onchange={() => pick('service', t.name)} /><span>{t.name}{#if !t.running} <span class="bb-note">{T.targetsNotRunning}</span>{/if}</span></label>
+        <label class="bb-check"><input type="checkbox" checked={isSelected('service', t.name)} onchange={() => pick('service', t.name)} /><span>{t.name}{#if targetRunState(t) === 'stopped'} <span class="bb-note">{T.targetsNotRunning}</span>{:else if targetRunState(t) === 'unknown'} <span class="bb-note">{T.targetsStateUnknown}</span>{/if}</span></label>
       {/each}
     </fieldset>
     {@render targetChips(extraPicked)}

@@ -1,6 +1,9 @@
 package blackbox
 
-import "strings"
+import (
+	"strings"
+	"sync"
+)
 
 // ProcInfo is one process in the inventory. Identity is (PID, Start): a PID
 // alone is not identity because Windows reuses PIDs after a recycle.
@@ -88,6 +91,11 @@ func dotnetChildren(procs []ProcInfo, parentPID uint32) []ProcInfo {
 // and re-read on every Inventory. The snapshot and module loader are injected
 // so tests need no Windows.
 type Resolver struct {
+	// mu guards every cache below. A group worker from an earlier tick can still
+	// be resolving targets while the tick goroutine asks for the process-set
+	// verdict, so the resolver must be safe for concurrent callers.
+	mu sync.Mutex
+
 	snapshotFn    func() ([]ProcInfo, error)
 	loadModulesFn func(pid uint32) ([]string, error)
 	instancesFn   func() ([]string, error)  // W3SVC_W3WP counter instances (BBX-1-11)
@@ -125,6 +133,13 @@ func NewResolver() *Resolver {
 // module read leaves Runtime 0 (unknown), never a guess, and is not cached so
 // a later set change retries it.
 func (r *Resolver) Inventory() ([]ProcInfo, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inventory()
+}
+
+// inventory is the unlocked body; callers must hold mu.
+func (r *Resolver) inventory() ([]ProcInfo, error) {
 	procs, err := r.snapshotFn()
 	if err != nil {
 		return nil, err
@@ -182,6 +197,8 @@ func (r *Resolver) Inventory() ([]ProcInfo, error) {
 // RunHost asks once per collection cycle and shares the verdict with every
 // group, so all wildcard groups re-expand together, never per tick.
 func (r *Resolver) ProcessSetChanged() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	procs, err := r.snapshotFn()
 	if err != nil {
 		return false

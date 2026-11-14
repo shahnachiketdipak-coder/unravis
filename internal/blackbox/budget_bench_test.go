@@ -383,8 +383,8 @@ func TestBudgetSlowGroupSkipped(t *testing.T) {
 	if s1.VM != nil {
 		t.Fatal("slow group was not skipped")
 	}
-	if !missingHas(s1, "skipped: slow") {
-		t.Fatalf("Missing = %v, want skipped: slow", s1.Missing)
+	if !missingHas(s1, "vm: slow") {
+		t.Fatalf("Missing = %v, want vm: slow", s1.Missing)
 	}
 	if slow.calls != 0 {
 		t.Fatalf("slow group ran %d times, want 0 while marked", slow.calls)
@@ -421,8 +421,8 @@ func TestBudgetSlowGroupSkipped(t *testing.T) {
 		if s.VM != nil {
 			t.Fatalf("gate tick %d: slow group ran while marked", i)
 		}
-		if !missingHas(s, "skipped: slow") {
-			t.Fatalf("gate tick %d: Missing = %v, want skipped: slow", i, s.Missing)
+		if !missingHas(s, "vm: slow") {
+			t.Fatalf("gate tick %d: Missing = %v, want vm: slow", i, s.Missing)
 		}
 	}
 	elapsed := time.Since(start)

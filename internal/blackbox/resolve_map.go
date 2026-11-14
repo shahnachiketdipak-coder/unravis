@@ -39,8 +39,10 @@ type svcProc struct {
 // target. Instance/service lists are re-enumerated only when the process set
 // changes. Unmatched selected names come back in the second slice, in order.
 func (r *Resolver) ResolveTargets(targets []Target) ([]ResolvedTarget, []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var missing []string
-	procs, err := r.Inventory()
+	procs, err := r.inventory()
 	if err != nil {
 		for _, t := range targets {
 			missing = append(missing, t.Name)

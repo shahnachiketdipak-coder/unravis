@@ -67,6 +67,12 @@ type clrGroup struct {
 func newCLRGroup(d GroupDeps) (Group, error) {
 	src, owned := d.Source, false
 	if src == nil {
+		if d.Targets == nil {
+			// Nothing selected: do not create a machine-wide detail query at all
+			// (W2-04). The per-tick short-circuit alone still expanded, added and
+			// primed every Process instance before filtering the output.
+			return nil, errNoTargets
+		}
 		p, err := NewPDHSource(clrPaths)
 		if err != nil {
 			return nil, err // no PDH (non-Windows) or no CLR objects: skipped

@@ -1,6 +1,7 @@
 package blackbox
 
 import (
+	"sync/atomic"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -92,8 +93,9 @@ func RunHost(ctx context.Context, o HostOptions) error {
 	// verdict per collection cycle. With no selected targets, Targets stays
 	// nil and machine-wide groups work exactly as before.
 	resolver := NewResolver()
-	gate := &processChangeGate{resolver: resolver, changed: resolver.ProcessSetChanged()}
-	deps := GroupDeps{Config: cfg, Cores: CoreCount(), ProcessSetChanged: func() bool { return gate.changed }}
+	gate := &processChangeGate{resolver: resolver}
+	gate.changed.Store(resolver.ProcessSetChanged())
+	deps := GroupDeps{Config: cfg, Cores: CoreCount(), ProcessSetChanged: func() bool { return gate.changed.Load() }}
 	if len(cfg.Targets) > 0 {
 		deps.Targets = func() []ResolvedTarget {
 			rt, _ := resolver.ResolveTargets(cfg.Targets)
@@ -138,11 +140,13 @@ func RunHost(ctx context.Context, o HostOptions) error {
 type processChangeGate struct {
 	inner    Collector
 	resolver *Resolver
-	changed  bool
+	// changed is atomic: a group worker from an earlier tick may read it while
+	// the tick goroutine stores the new verdict.
+	changed atomic.Bool
 }
 
 func (g *processChangeGate) Collect(now time.Time) (Sample, error) {
-	g.changed = g.resolver.ProcessSetChanged()
+	g.changed.Store(g.resolver.ProcessSetChanged())
 	return g.inner.Collect(now)
 }
 

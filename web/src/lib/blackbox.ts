@@ -100,8 +100,29 @@ export type TargetKind = 'appPool' | 'service';
 export interface TargetRef { kind: TargetKind; name: string }
 
 /** One detected app pool or service, as GET /api/blackbox/this-pc/targets lists it. Names only. */
-export interface TargetInfo { name: string; running: boolean }
-export interface TargetsAnswer { appPools: TargetInfo[]; services: TargetInfo[]; detected: boolean }
+export interface TargetInfo {
+  name: string;
+  /** Present only when the running state was actually read; absent means unknown. */
+  running?: boolean;
+  /** Fixed operational code from the server: running, stopped or unknown. */
+  state?: 'running' | 'stopped' | 'unknown';
+}
+export interface TargetsAnswer {
+  appPools: TargetInfo[]; services: TargetInfo[]; detected: boolean;
+  /** Per-source detection: detected, unavailable or not-found. Optional for older servers. */
+  appPoolsState?: string; servicesState?: string;
+}
+
+/** What is actually known about a detected target (W2-07). Configuration presence is
+ *  never a running claim, and an unreadable state is unknown, not stopped. An older
+ *  server that always sends a boolean still reads correctly. */
+export type TargetRunState = 'running' | 'stopped' | 'unknown';
+export function targetRunState(t: TargetInfo): TargetRunState {
+  if (t.state === 'running' || t.state === 'stopped' || t.state === 'unknown') return t.state;
+  if (t.running === true) return 'running';
+  if (t.running === false) return 'stopped';
+  return 'unknown';
+}
 
 export interface Settings {
   name: string;

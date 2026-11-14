@@ -208,6 +208,7 @@ export const BB_TEXT = {
   targetsAppPools: 'App pools',
   targetsServices: 'Services',
   targetsNotRunning: 'not running',
+  targetsStateUnknown: 'running state unknown',
   targetsKindLabel: 'Kind',
   targetsKindAppPool: 'App pool',
   targetsKindService: 'Service',

@@ -332,7 +332,7 @@ func TestProcessChangeGateOneVerdictPerCycle(t *testing.T) {
 	}
 	gate := &processChangeGate{resolver: r}
 	var verdicts []bool
-	gate.inner = &gateCollector{verdicts: &verdicts, read: func() bool { return gate.changed }}
+	gate.inner = &gateCollector{verdicts: &verdicts, read: func() bool { return gate.changed.Load() }}
 
 	cycle := func(want bool) {
 		t.Helper()
