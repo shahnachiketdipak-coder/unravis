@@ -14,10 +14,10 @@ const setPrefix = "SET NOCOUNT ON; SET LOCK_TIMEOUT 1000; SET DEADLOCK_PRIORITY 
 // TOP 256 is the C6 cap in SQL (defense in depth; the reader stops at 257).
 const stmtRequests = setPrefix + `SELECT TOP 256 ISNULL(r.wait_type, N'') AS wait_type,
   COUNT(*) AS tasks,
-  MAX(r.wait_time_ms) AS max_wait_ms,
+  MAX(r.wait_time) AS max_wait_ms,
   SUM(CASE WHEN r.blocking_session_id > 0 THEN 1 ELSE 0 END) AS blocked,
   COUNT(DISTINCT CASE WHEN r.blocking_session_id > 0 AND ISNULL(b.blocking_session_id, 0) = 0 THEN r.blocking_session_id END) AS head_blockers,
-  MAX(CASE WHEN r.blocking_session_id > 0 THEN r.wait_time_ms ELSE 0 END) AS max_block_ms
+  MAX(CASE WHEN r.blocking_session_id > 0 THEN r.wait_time ELSE 0 END) AS max_block_ms
 FROM sys.dm_exec_requests AS r
 LEFT JOIN sys.dm_exec_requests AS b ON b.session_id = r.blocking_session_id
 WHERE r.session_id <> @@SPID
@@ -46,7 +46,10 @@ WHERE status = N'VISIBLE ONLINE' /* unravis:bb:schedulers */`
 
 // bb:semaphores (BL-118): query resource semaphore counts; deltas computed in
 // Go. TOP 16 is the C6 cap in SQL (defense in depth; the reader stops at 17).
-const stmtSemaphores = setPrefix + `SELECT TOP 16 resource_semaphore_id, grantee_count, waiter_count, forced_grant_count, timeout_count
+// The DMV column is timeout_error_count; it is aliased to timeout_count so the
+// fixed output mapping is unchanged. sys.dm_exec_requests likewise exposes
+// wait_time (ms), not wait_time_ms - that name belongs to dm_os_wait_stats.
+const stmtSemaphores = setPrefix + `SELECT TOP 16 resource_semaphore_id, grantee_count, waiter_count, forced_grant_count, timeout_error_count AS timeout_count
 FROM sys.dm_exec_query_resource_semaphores
 ORDER BY resource_semaphore_id /* unravis:bb:semaphores */`
 
