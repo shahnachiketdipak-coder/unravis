@@ -124,6 +124,28 @@ export function targetRunState(t: TargetInfo): TargetRunState {
   return 'unknown';
 }
 
+/**
+ * What the picker can honestly say about one selected target (W3-06). A name that is in the
+ * detected list reads its state through targetRunState. A name that is absent is never guessed
+ * to mean stopped: the endpoint offers running services only and caps each list at 256, so an
+ * absent name may be stopped, may be beyond the cap, or may sit in a list that could not be read.
+ * The per-source state tells those apart. `answer` is null when nothing could be read at all.
+ */
+export type PickedTargetState = 'running' | 'stopped' | 'unknown' | 'not-in-list' | 'list-unreadable' | 'source-not-found';
+export function pickedTargetState(kind: TargetKind, name: string, answer: TargetsAnswer | null): PickedTargetState {
+  if (!answer) return 'list-unreadable';
+  const list = kind === 'appPool' ? answer.appPools : answer.services;
+  const found = (list ?? []).find((t) => t.name === name);
+  if (found) return targetRunState(found);
+  const source = kind === 'appPool' ? answer.appPoolsState : answer.servicesState;
+  if (source === 'unavailable') return 'list-unreadable';
+  if (source === 'not-found') return 'source-not-found';
+  // 'detected', or an older server that sends no per-source state but did detect something:
+  // the list was read and this name is simply not in it. Absence is unknown, never stopped.
+  if (source === 'detected' || answer.detected) return 'not-in-list';
+  return 'list-unreadable';
+}
+
 export interface Settings {
   name: string;
   folder: string;
