@@ -51,13 +51,15 @@ Reviewer: U = Ultimate, P = Performance. Tier: E = Efficient, P = Performance.
 | BBX-5-08 back-off | committed | P | 7 | U gate: C7 fully met; fails closed | (wave 7) |
 
 ## Wave 8
-| BBX-5-02 SQL CLI+grant | pending | P | 8 | — | — |
-| BBX-5-04 /status C11 | pending | P | 8 | — | — |
-| BBX-5-06 conn controls | pending | P | 8 | — | — |
-| BBX-5-09 output+caps | pending | P | 8 | — | — |
+| BBX-5-02 SQL CLI+grant | committed | P | 8 | U: MED --config binding + LOW revoke fixed; WinService wired direct | (wave 8 + fix) |
+| BBX-5-04 /status C11 | committed | P | 8 | U: clean (C11 shape, no SQL over HTTP) | (wave 8) |
+| BBX-5-06 conn controls | committed | P | 8 | U: HIGH trust-anchor + LOW C6 reader cap fixed; loopback dial assert | (wave 8 + fix) |
+| BBX-5-09 output+caps | committed | P | 8 | U: clean (C9/C6, pins applied); Row dedup | (wave 8) |
 
 ## Wave 9
 | BBX-5-07 ceiling+errors | pending | P | 9 | — | — |
+| BBX-6-02 dump catalogue (pulled forward) | pending | P | 9 | — | — |
+| BBX-5-16 lane server (pulled forward) | pending | P | 9 | — | — |
 
 ## Wave 10 — ULTIMATE GATE (BL-123+BL-124) before samplers
 | BBX-5-10 runner+C13 | pending | P | 10 | — | — |
