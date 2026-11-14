@@ -74,3 +74,21 @@ M8 ceiling perms cap removed   -> KILLED | clean-restore
 ```
 
 8/8 killed. M4 needed a test rewrite first — recorded above rather than smoothed over.
+
+## Correction (same day, after wave 11 integrated)
+
+The ~342 MB/day and ~2.4 GB figures above were computed while the C13 fixture still ran
+three of the seven samplers on the wrong cadence (requests at 60 s, waits and tempdb at
+15 s). With `bb:waits` and `bb:tempdb` moved to their documented 60 s cadences and the
+fixture aligned to the registry, the honest figures are:
+
+- realistic tier: ~19 MB/day (mean tick 3 269 B, worst tick 7 826 B);
+- at-cap tier: ~200 MB/day (199 877 760 B), each kind at its own cadence, so the 168-hour
+  window is ~1.4 GB, not ~2.4 GB;
+- the default 2 GB budget gives the SQL folder ~537 MB, i.e. a little over two days at the
+  saturated worst case (the share itself is unchanged).
+
+`budget_test.go` now prints the cadence-aware projection, `internal/bbsql/sampler_registry_test.go`
+fails if the fixture and the registry disagree again, and the comments in `runner.go` and
+`cmd/unravis-blackbox/sqlrunner.go` carry the corrected numbers. Full record:
+`BBX-5-11-12-13-17-integration.md`.
