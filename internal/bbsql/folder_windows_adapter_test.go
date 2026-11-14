@@ -3,6 +3,8 @@
 package bbsql
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -42,18 +44,11 @@ func applySDDL(t *testing.T, dir, sddl string) {
 // pre-existing smoke test only asserted refusal of a temp folder, so it passed
 // even while the reader always refused.
 func TestFolderAdapterAcceptsInstallerLock(t *testing.T) {
-	self := folderSelfSID()
-	if self == "" {
-		t.Skip("this process token has no readable SID")
-	}
 	dir := t.TempDir()
-	// SYSTEM + Administrators + this account, protected, nothing inherited: the
-	// shape install-sql writes, with the running account as the service trustee.
-	applySDDL(t, dir, "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;"+self+")")
+	// SYSTEM + Administrators + the PINNED SQL service SID, protected, nothing
+	// inherited: the exact shape install-sql writes (W10-11).
+	applySDDL(t, dir, "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;"+sqlServiceSID+")")
 
-	if err := CheckFolderAccess(dir); err != nil {
-		t.Fatalf("the installer's locked folder was refused: %v", err)
-	}
 	acl, err := readFolderACL(dir)
 	if err != nil {
 		t.Fatalf("readFolderACL: %v", err)
@@ -64,17 +59,22 @@ func TestFolderAdapterAcceptsInstallerLock(t *testing.T) {
 	if len(acl.Grantees) != 3 {
 		t.Fatalf("grantees = %v, want the three trustees", acl.Grantees)
 	}
+	if err := acl.check(); err != nil {
+		t.Fatalf("the installer's locked DACL was refused: %v", err)
+	}
+	// The production identity check: this test process is not the SQL service,
+	// so the full check must refuse with the fixed identity sentence — never
+	// pass just because the DACL is right (W10-11).
+	if err := CheckFolderAccess(dir); !errors.Is(err, errFolderIdentity) {
+		t.Fatalf("CheckFolderAccess outside the service = %v, want the identity refusal", err)
+	}
 }
 
 // W10-12: an allow form whose SID is not at SidStart must refuse, never be
 // mistaken for a deny and silently ignored. Type 11 is
 // ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, not a deny.
 func TestFolderAdapterRefusesUnreadableGrantForms(t *testing.T) {
-	self := folderSelfSID()
-	if self == "" {
-		t.Skip("this process token has no readable SID")
-	}
-	base := "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;" + self + ")"
+	base := "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;" + sqlServiceSID + ")"
 	for _, tc := range []struct {
 		name string
 		sddl string
@@ -85,10 +85,21 @@ func TestFolderAdapterRefusesUnreadableGrantForms(t *testing.T) {
 		{"everyone grant", base + "(A;OICI;FA;;;WD)"},
 		// An empty DACL grants nobody: the service could not write either.
 		{"empty dacl", "D:PAI"},
+		// A grant to the CURRENT token instead of the pinned service SID is
+		// outside the trustee set too (W10-11): the rule no longer trusts
+		// "whatever account runs the check".
+		{"current-token grant", "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;" + folderSelfSID() + ")"},
 	} {
+		if tc.name == "current-token grant" && strings.EqualFold(folderSelfSID(), sqlServiceSID) {
+			continue // running as the actual service: the grant IS the pinned SID
+		}
 		dir := t.TempDir()
 		applySDDL(t, dir, tc.sddl)
-		if err := CheckFolderAccess(dir); err == nil {
+		acl, err := readFolderACL(dir)
+		if err != nil {
+			t.Fatalf("%s: readFolderACL: %v", tc.name, err)
+		}
+		if err := acl.check(); err == nil {
 			t.Errorf("%s: accepted, want refusal", tc.name)
 		}
 	}
@@ -96,13 +107,13 @@ func TestFolderAdapterRefusesUnreadableGrantForms(t *testing.T) {
 
 // An unprotected DACL is refused even when its trustees are exactly right.
 func TestFolderAdapterRefusesUnprotected(t *testing.T) {
-	self := folderSelfSID()
-	if self == "" {
-		t.Skip("this process token has no readable SID")
-	}
 	dir := t.TempDir()
-	applySDDL(t, dir, "D:AI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;"+self+")")
-	if err := CheckFolderAccess(dir); err == nil {
+	applySDDL(t, dir, "D:AI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;"+sqlServiceSID+")")
+	acl, err := readFolderACL(dir)
+	if err != nil {
+		t.Fatalf("readFolderACL: %v", err)
+	}
+	if err := acl.check(); err == nil {
 		t.Fatal("an unprotected DACL was accepted")
 	}
 }

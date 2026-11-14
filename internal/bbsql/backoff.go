@@ -45,17 +45,21 @@ func NewState() State { return State{Interval: BaseInterval, State: StateOn} }
 
 // OnSuccess recovers back-off one step toward the base interval and clears the
 // failure count. It never clears AutoOff: auto-off is owner-only. It also never
-// steps below the slow floor: three slow samples demoted the 15 s items, and one
-// lucky success must not undo that demotion on its own. SlowStrikes is not
-// reset here either - only a genuinely fast sample (OnSlow) calms the instance,
-// and once it does, recovery proceeds back down to BaseInterval.
+// steps below the slow floor ONCE the three-strike threshold has demoted the
+// 15 s items: a single lucky success must not undo that demotion on its own.
+// The floor applies only at SlowStrikeLimit, not for any nonzero strike (W7-06):
+// one or two slow samples below the threshold must not impose the 60 s floor.
+// SlowStrikes is not reset here either - only a genuinely fast sample (OnSlow)
+// calms the instance, and once it does, recovery proceeds back down to
+// BaseInterval. Instance failure back-off (Failures/Interval doubling) is kept
+// separate from this slow-demotion floor.
 func (s *State) OnSuccess() {
 	if s.AutoOff {
 		return
 	}
 	s.Failures = 0
 	floor := BaseInterval
-	if s.SlowStrikes > 0 {
+	if s.SlowStrikes >= SlowStrikeLimit {
 		floor = DemotedInterval
 	}
 	s.Interval /= 2
@@ -108,7 +112,7 @@ func StatePath(folder string) string { return filepath.Join(folder, "sql", "stat
 
 // Persistence seam: injectable so tests need no real disk.
 var (
-	readFile  = os.ReadFile
+	readFile = os.ReadFile
 	// writeFile replaces the state atomically: a temp file in the same folder,
 	// flushed, then renamed. An in-place overwrite could leave a torn state file
 	// after a power loss, which Load would then refuse - turning a healthy

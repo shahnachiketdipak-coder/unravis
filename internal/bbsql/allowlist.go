@@ -3,7 +3,18 @@
 // plus exactly one read-only SELECT plus a tag comment. Nothing is built from
 // input and no statement takes parameters; deltas are computed in Go by the
 // samplers, never in SQL. Statement and IsAllowed are the only send gates.
+//
+// W7-05: the send gates read a PRIVATE registry snapshot taken at init, and
+// every entry must pass lintStatement, a restricted-grammar validator (exact
+// SET prefix, exactly one SELECT, no trailing statement, no SELECT INTO, only
+// approved sources). The exported Statements map stays for the existing test
+// suite; mutating it can no longer change what the gates admit.
 package bbsql
+
+import (
+	"fmt"
+	"strings"
+)
 
 // setPrefix is the C3 session prefix prepended to every batch.
 const setPrefix = "SET NOCOUNT ON; SET LOCK_TIMEOUT 1000; SET DEADLOCK_PRIORITY LOW; SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; "
@@ -77,15 +88,27 @@ ORDER BY database_id /* unravis:bb:ag */`
 // instance, so an instance with no availability groups never has an AG DMV
 // queried: the gate returns one row with hadr = 1 only when IsHadrEnabled is
 // on, and the runner skips bb:ag otherwise. No DMV, no names.
-const stmtHadr = setPrefix + `SELECT TOP 1 CAST(SERVERPROPERTY('IsHadrEnabled') AS int) AS hadr /* unravis:bb:hadr */`
+const stmtHadr = setPrefix + `SELECT TOP 1 CAST(SERVERPROPERTY(N'IsHadrEnabled') AS int) AS hadr /* unravis:bb:hadr */`
 
-// bb:ceiling_role (BL-124): C8 control query — fixed server-role membership
-// flags only (0/1); no login, host or session data. Every role listed here
-// carries more rights than the Blackbox needs, so ANY flag of 1 is a refusal:
-// sysadmin/securityadmin (full control / grant rights) plus serveradmin,
-// setupadmin, processadmin, dbcreator, bulkadmin and diskadmin (server-wide
-// configuration, process, database-creation, bulk-insert and file rights).
-// IS_SRVROLEMEMBER is server-scoped, matching the server-level ceiling.
+// bb:ceiling_role (BL-124, W9-01): C8 control query — one row of 0-on-good
+// failure flags. The first eight are fixed server-role membership flags
+// (IS_SRVROLEMEMBER is server-scoped): any of them 1 refuses the login.
+//
+// The last four are the POSITIVE PROOF that the effective-permission list was
+// readable (W9-01: an empty result must never mean "clean"). The source is
+// sys.fn_my_permissions(NULL, N'SERVER'), the EFFECTIVE server permissions of
+// the current security context: it expands custom and nested server roles,
+// Windows token groups, public and the SQL2022 ##MS_*## fixed roles, and it
+// already subtracts DENYs, so a protective DENY is never reported as an excess
+// right. The aggregates read the WHOLE list (COUNT/SUM), so the C6 row cap
+// cannot hide a right:
+//
+//	principal_missing  SUSER_ID() did not resolve the login
+//	perm_empty         the effective list has no rows at all
+//	perm_outside       effective rights outside the ceiling (a refusal)
+//	connect_missing    CONNECT SQL is absent from the effective list
+//
+// A NULL flag (unreadable) fails closed in CheckCeiling, never counted as 0.
 const stmtCeilingRole = setPrefix + `SELECT IS_SRVROLEMEMBER(N'sysadmin') AS sysadmin,
   IS_SRVROLEMEMBER(N'securityadmin') AS securityadmin,
   IS_SRVROLEMEMBER(N'serveradmin') AS serveradmin,
@@ -93,57 +116,299 @@ const stmtCeilingRole = setPrefix + `SELECT IS_SRVROLEMEMBER(N'sysadmin') AS sys
   IS_SRVROLEMEMBER(N'processadmin') AS processadmin,
   IS_SRVROLEMEMBER(N'dbcreator') AS dbcreator,
   IS_SRVROLEMEMBER(N'bulkadmin') AS bulkadmin,
-  IS_SRVROLEMEMBER(N'diskadmin') AS diskadmin /* unravis:bb:ceiling_role */`
+  IS_SRVROLEMEMBER(N'diskadmin') AS diskadmin,
+  CASE WHEN SUSER_ID() IS NULL THEN 1 ELSE 0 END AS principal_missing,
+  CASE WHEN COUNT(*) = 0 THEN 1 ELSE 0 END AS perm_empty,
+  SUM(CASE WHEN permission_name NOT IN (N'CONNECT SQL', N'VIEW ANY DATABASE', N'VIEW SERVER STATE', N'VIEW SERVER PERFORMANCE STATE') THEN 1 ELSE 0 END) AS perm_outside,
+  CASE WHEN ISNULL(SUM(CASE WHEN permission_name = N'CONNECT SQL' THEN 1 ELSE 0 END), 0) = 0 THEN 1 ELSE 0 END AS connect_missing
+FROM sys.fn_my_permissions(NULL, N'SERVER') /* unravis:bb:ceiling_role */`
 
-// bb:ceiling_perms (BL-124): C8 control query — returns ONLY permissions
-// outside the Blackbox ceiling, so any returned row is a refusal. The NOT IN
-// filter keeps the check fail-closed under the C6 row cap: a full permission
-// list could be truncated before an extra right is seen. TOP 2 mirrors the
-// reader cap; the Go subset assert in CheckCeiling is the second gate.
-//
-// The grantee MUST be resolved with SUSER_ID(), the current session's SERVER
-// principal id (sys.server_principals), because sys.server_permissions.
-// grantee_principal_id is a server principal id. DATABASE_PRINCIPAL_ID()
-// returns a DATABASE principal id instead: with a login-only grant (no user in
-// the database, so the session runs as guest = database principal 2) it would
-// read the public server role's row (server principal 2) and a GRANT CONTROL
-// SERVER to the actual login would be invisible — a C8 bypass.
+// bb:ceiling_perms (BL-124, W9-01): C8 control query — returns ONLY effective
+// permissions outside the Blackbox ceiling, so any returned row is a refusal.
+// The source is the same effective-permission function as bb:ceiling_role
+// (roles, groups, public and ##MS_*## included, DENYs subtracted), NOT the
+// direct-grant catalog: a right inherited through a custom role belongs to the
+// role's principal id and was invisible to a SUSER_ID() predicate on
+// sys.server_permissions. The NOT IN filter keeps the check fail-closed under
+// the C6 row cap (TOP 2 == cap); the Go subset assert in CheckCeiling is the
+// second gate, and the positive proof lives in bb:ceiling_role.
 const stmtCeilingPerms = setPrefix + `SELECT TOP 2 permission_name
-FROM sys.server_permissions
-WHERE grantee_principal_id = SUSER_ID()
-  AND permission_name NOT IN (N'CONNECT SQL', N'VIEW ANY DATABASE', N'VIEW SERVER STATE', N'VIEW SERVER PERFORMANCE STATE')
+FROM sys.fn_my_permissions(NULL, N'SERVER')
+WHERE permission_name NOT IN (N'CONNECT SQL', N'VIEW ANY DATABASE', N'VIEW SERVER STATE', N'VIEW SERVER PERFORMANCE STATE')
 ORDER BY permission_name /* unravis:bb:ceiling_perms */`
 
-// Statements is the complete allowlist and the single source of truth for what
-// may be sent. Values are fixed constants; a later packet may add more fixed
-// entries (e.g. the bb:hadr guard) but must never build text at runtime.
-var Statements = map[string]string{
-	"bb:requests":      stmtRequests,
-	"bb:waits":         stmtWaits,
-	"bb:schedulers":    stmtSchedulers,
-	"bb:semaphores":    stmtSemaphores,
-	"bb:tempdb":        stmtTempdb,
-	"bb:filestats":     stmtFilestats,
-	"bb:ag":            stmtAG,
-	"bb:hadr":          stmtHadr,
-	"bb:ceiling_role":  stmtCeilingRole,
-	"bb:ceiling_perms": stmtCeilingPerms,
+// buildRegistry assembles the fixed allowlist from the compile-time constants.
+// It is called twice at init: once for the private production registry the
+// send gates read, once for the exported compatibility map.
+func buildRegistry() map[string]string {
+	return map[string]string{
+		"bb:requests":      stmtRequests,
+		"bb:waits":         stmtWaits,
+		"bb:schedulers":    stmtSchedulers,
+		"bb:semaphores":    stmtSemaphores,
+		"bb:tempdb":        stmtTempdb,
+		"bb:filestats":     stmtFilestats,
+		"bb:ag":            stmtAG,
+		"bb:hadr":          stmtHadr,
+		"bb:ceiling_role":  stmtCeilingRole,
+		"bb:ceiling_perms": stmtCeilingPerms,
+	}
+}
+
+// statements is the PRIVATE production registry: the single source of truth
+// for what may be sent. Statement and IsAllowed read only this map, so a
+// runtime mutation of the exported compatibility map cannot widen the send
+// policy (W7-05). Values are fixed constants; a later packet may add more
+// fixed entries but must never build text at runtime.
+var statements = buildRegistry()
+
+// Statements is the exported compatibility view of the allowlist, kept because
+// the existing test suite reads it. It is NOT the send policy: the gates read
+// the private snapshot above, and every entry here must pass lintStatement at
+// init. Do not mutate it in production code.
+var Statements = buildRegistry()
+
+func init() {
+	// Mechanical C2 gate: a registry entry that does not satisfy the restricted
+	// grammar stops the process at startup instead of reaching SQL Server.
+	for id, text := range statements {
+		if err := lintStatement(id, text); err != nil {
+			panic("bbsql: allowlist entry " + id + " fails the C2 grammar: " + err.Error())
+		}
+	}
 }
 
 // Statement returns the fixed allowlisted text for id. ok is false for any
 // unknown id; a query is never built or altered from input.
 func Statement(id string) (string, bool) {
-	text, ok := Statements[id]
+	text, ok := statements[id]
 	return text, ok
 }
 
 // IsAllowed reports whether text exactly equals one of the allowlisted
 // statements. Any mutation (whitespace, an added token, a second SELECT) fails.
 func IsAllowed(text string) bool {
-	for _, s := range Statements {
+	for _, s := range statements {
 		if s == text {
 			return true
 		}
 	}
 	return false
+}
+
+// --- W7-05 restricted-grammar lint -----------------------------------------
+
+// sqlToken is one lexical token of a statement body.
+type sqlToken struct {
+	kind string // "word", "num", "str", "punct"
+	text string
+}
+
+// lexSQL tokenizes the body after the C3 prefix. Only N'...' string literals
+// are legal (every constant uses them); a bare quote, an unterminated literal
+// or an unknown character is a refusal, not a guess.
+func lexSQL(s string) ([]sqlToken, error) {
+	var toks []sqlToken
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
+			i++
+		case c == 'N' && i+1 < len(s) && s[i+1] == '\'':
+			j := i + 2
+			for j < len(s) {
+				if s[j] == '\'' {
+					if j+1 < len(s) && s[j+1] == '\'' { // escaped quote
+						j += 2
+						continue
+					}
+					break
+				}
+				j++
+			}
+			if j >= len(s) {
+				return nil, fmt.Errorf("unterminated string literal")
+			}
+			toks = append(toks, sqlToken{"str", s[i : j+1]})
+			i = j + 1
+		case c == '\'':
+			return nil, fmt.Errorf("bare string literal (only N'...' is allowed)")
+		case isWordStart(c):
+			j := i + 1
+			for j < len(s) && isWordChar(s[j]) {
+				j++
+			}
+			toks = append(toks, sqlToken{"word", s[i:j]})
+			i = j
+		case c >= '0' && c <= '9':
+			j := i + 1
+			for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+				j++
+			}
+			toks = append(toks, sqlToken{"num", s[i:j]})
+			i = j
+		case strings.ContainsRune("(),.;=<>+-*/%", rune(c)):
+			toks = append(toks, sqlToken{"punct", string(c)})
+			i++
+		default:
+			return nil, fmt.Errorf("unexpected character %q", string(c))
+		}
+	}
+	return toks, nil
+}
+
+func isWordStart(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '_' || c == '@' || c == '#'
+}
+
+func isWordChar(c byte) bool {
+	return isWordStart(c) || c >= '0' && c <= '9' || c == '$'
+}
+
+// lintBannedKeywords are statement/execution tokens refused as whole words.
+// INTO is here too: SELECT ... INTO #x writes a table (W7-05). SET is here so
+// a post-prefix session-option override can never ride along.
+var lintBannedKeywords = map[string]bool{
+	"exec": true, "execute": true, "insert": true, "update": true, "delete": true,
+	"merge": true, "alter": true, "create": true, "drop": true, "grant": true,
+	"revoke": true, "deny": true, "dbcc": true, "kill": true, "openrowset": true,
+	"openquery": true, "opendatasource": true, "waitfor": true, "set": true,
+	"union": true, "truncate": true, "shutdown": true, "backup": true,
+	"restore": true, "use": true, "declare": true, "print": true,
+	"raiserror": true, "throw": true, "bulk": true, "into": true, "values": true,
+	"begin": true, "commit": true, "rollback": true, "while": true, "goto": true,
+}
+
+// lintBannedColumns are exfiltration substrings refused anywhere in the text
+// (the C2 column blacklist). The fixed constants carry none of them.
+var lintBannedColumns = []string{
+	"sql_text", "dm_exec_sql_text", "query_plan", "input_buffer", "_handle",
+	"statement_", "resource_description", "program_name", "host_name", "login",
+	"physical_name", "master_files", "availability_replicas",
+}
+
+// lintApprovedFrom are the ONLY sources a statement may read, rendered in the
+// lexer's canonical spacing. A new source is a reviewed change to this list,
+// never a runtime string.
+var lintApprovedFrom = map[string]bool{
+	"sys.dm_exec_requests AS r LEFT JOIN sys.dm_exec_requests AS b ON b.session_id = r.blocking_session_id": true,
+	"sys.dm_os_wait_stats": true,
+	"sys.dm_os_schedulers": true,
+	"sys.dm_exec_query_resource_semaphores": true,
+	"sys.dm_db_session_space_usage": true,
+	"sys.dm_io_virtual_file_stats(NULL, NULL)": true,
+	"sys.dm_hadr_database_replica_states": true,
+	"sys.fn_my_permissions(NULL, N'SERVER')": true,
+}
+
+// renderTokens joins tokens with single spaces, tightening around punctuation
+// so "sys . fn ( NULL , N'SERVER' )" renders as the approved source shape.
+func renderTokens(toks []sqlToken) string {
+	var b strings.Builder
+	for i, t := range toks {
+		if i > 0 {
+			prev := toks[i-1].text
+			if t.text != "," && t.text != ")" && t.text != "." && t.text != "(" && prev != "(" && prev != "." {
+				b.WriteByte(' ')
+			}
+		}
+		b.WriteString(t.text)
+	}
+	return b.String()
+}
+
+// lintStatement validates the restricted C2 grammar of one registry entry:
+// the exact C3 SET prefix, exactly one read-only SELECT, the entry's tag as
+// the ONLY comment, no semicolon (so no trailing statement and no post-prefix
+// SET), no SELECT INTO, no execution/write keyword, only approved sources and
+// only N'...' literals. It is the mechanical gate behind TestLintC2.
+func lintStatement(id, text string) error {
+	if !strings.HasPrefix(text, setPrefix) {
+		return fmt.Errorf("missing the exact C3 SET prefix")
+	}
+	body := text[len(setPrefix):]
+	tag := "/* unravis:" + id + " */"
+	if !strings.HasSuffix(body, tag) {
+		return fmt.Errorf("missing the trailing tag %s", tag)
+	}
+	sql := strings.TrimSpace(body[:len(body)-len(tag)])
+	if strings.Contains(sql, "/*") || strings.Contains(sql, "--") {
+		return fmt.Errorf("comment inside the statement body")
+	}
+	lower := strings.ToLower(text)
+	for _, tok := range lintBannedColumns {
+		if strings.Contains(lower, tok) {
+			return fmt.Errorf("banned column token %q", tok)
+		}
+	}
+	toks, err := lexSQL(sql)
+	if err != nil {
+		return err
+	}
+	if len(toks) == 0 || toks[0].kind != "word" || !strings.EqualFold(toks[0].text, "SELECT") {
+		return fmt.Errorf("body must start with SELECT")
+	}
+	selects, tops := 0, 0
+	for i, t := range toks {
+		if t.kind == "punct" && t.text == ";" {
+			return fmt.Errorf("semicolon: a trailing statement or extra SET")
+		}
+		if t.kind != "word" {
+			continue
+		}
+		w := strings.ToLower(t.text)
+		if w == "select" {
+			selects++
+		}
+		if lintBannedKeywords[w] {
+			return fmt.Errorf("banned keyword %q", t.text)
+		}
+		if strings.HasPrefix(w, "sp_") || strings.HasPrefix(w, "xp_") {
+			return fmt.Errorf("banned procedure prefix %q", t.text)
+		}
+		if strings.HasPrefix(w, "@") && w != "@@spid" {
+			return fmt.Errorf("variable %q is not allowed", t.text)
+		}
+		if w == "top" {
+			tops++
+			if tops > 1 {
+				return fmt.Errorf("more than one TOP")
+			}
+			if i+1 >= len(toks) || toks[i+1].kind != "num" {
+				return fmt.Errorf("TOP without a numeric bound")
+			}
+		}
+	}
+	if selects != 1 {
+		return fmt.Errorf("want exactly 1 SELECT, got %d", selects)
+	}
+	// The FROM clause (if any) must be an approved source, up to the next
+	// top-level clause keyword. No subqueries exist: a second SELECT already
+	// failed above.
+	from := -1
+	for i, t := range toks {
+		if t.kind == "word" && strings.EqualFold(t.text, "FROM") {
+			from = i
+			break
+		}
+	}
+	if from >= 0 {
+		end := len(toks)
+		for i := from + 1; i < len(toks); i++ {
+			if toks[i].kind == "word" {
+				switch strings.ToUpper(toks[i].text) {
+				case "WHERE", "GROUP", "ORDER", "HAVING":
+					end = i
+				}
+			}
+			if end != len(toks) {
+				break
+			}
+		}
+		src := renderTokens(toks[from+1 : end])
+		if !lintApprovedFrom[src] {
+			return fmt.Errorf("unapproved source %q", src)
+		}
+	}
+	return nil
 }

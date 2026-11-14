@@ -96,9 +96,11 @@ func readFolderACL(dir string) (folderACL, error) {
 	return out, nil
 }
 
-// folderSelfSID is the account running this process, which is the SQL service's
-// own virtual account when Windows started it as a service. Empty means the
-// check cannot name the third allowed trustee, and then it refuses.
+// folderSelfSID is the account running this process. CheckFolderAccess uses it
+// ONLY to verify the production identity: it must equal the pinned SQL service
+// SID (W10-11). It is never an allowed trustee by itself — a folder locked to
+// the current console account, or a check run by that account, still refuses.
+// Empty means the identity cannot be proven, and then the check refuses.
 func folderSelfSID() string {
 	h, err := windows.GetCurrentProcess()
 	if err != nil {
