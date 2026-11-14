@@ -137,6 +137,7 @@ var columnKeys = map[string]string{
 	"waiter_count": "waiters", "forced_grant_count": "forced", "timeout_count": "timeouts",
 	"internal_pages": "internalPages", "user_pages": "userPages",
 	"database_id": "databaseId", "file_id": "fileId",
+	"hadr":             "hadr",
 	"io_stall_read_ms": "readStallMs", "io_stall_write_ms": "writeStallMs",
 	"num_of_reads": "reads", "num_of_writes": "writes", "size_on_disk_bytes": "sizeOnDiskBytes",
 	"synchronization_state": "syncState",
