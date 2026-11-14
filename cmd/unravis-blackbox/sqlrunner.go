@@ -35,9 +35,12 @@ const sqlLocalServer = "(local)"
 // may use. The folder lives under the recorder's folder, but host housekeeping
 // never looks inside it, so the service must bound it itself - and the owner's
 // single number still has to cover both writers. A quarter of maxGB is the
-// split: at the measured worst case (~340 MB a day of samples) a default 2 GB
-// budget holds roughly three days, oldest whole hours going first, while the
-// recorder keeps the rest.
+// split: the measured worst case, every sampler at its row cap on its own
+// cadence, is ~200 MB a day (internal/bbsql/budget_test.go prints the figure),
+// so the default 2 GB budget gives the SQL folder ~537 MB - a little over two
+// days - and a full 168-hour window at that rate would need ~1.4 GB. The byte
+// cap therefore bites before the age limit on a busy instance, oldest whole
+// hours going first, while the recorder keeps the rest.
 const sqlBudgetShare = 4
 
 // runSQLServiceLoop is the real deps.sqlRun: it runs the bbsql runner in this

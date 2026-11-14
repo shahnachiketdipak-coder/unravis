@@ -147,8 +147,10 @@ type Runner struct {
 	MinFreePercent int
 	FreePercent    func(path string) (float64, error)
 	// MaxBytes is the C13 byte bound of the whole sample folder. Age retention
-	// alone does not bound it: the measured worst case is ~340 MB a day. 0 means
-	// no byte bound (tests); the service always sets one from the owner's config.
+	// alone does not bound it: the measured worst case, every sampler at its
+	// row cap on its own cadence, is ~200 MB a day (budget_test.go prints the
+	// figure). 0 means no byte bound (tests); the service always sets one from
+	// the owner's config.
 	MaxBytes int64
 
 	state     State
@@ -469,8 +471,9 @@ func (r *Runner) rotate(now time.Time) error {
 		total += info.Size()
 	}
 	// Retention by age does not bound the folder: the measured worst case is
-	// ~340 MB a day, so 168 hours of it is ~2.4 GB. With MaxBytes set, whole
-	// hours go from the oldest end until the folder fits. Dropping a whole hour
+	// ~200 MB a day with every sampler at its row cap, so 168 hours of it is
+	// ~1.4 GB. With MaxBytes set, whole hours go from the oldest end until the
+	// folder fits. Dropping a whole hour
 	// is honest: the hour is simply missing, never zero-filled.
 	for r.MaxBytes > 0 && total > r.MaxBytes && len(kept) > 1 {
 		if err := os.Remove(filepath.Join(r.Dir, kept[0].name)); err != nil && !os.IsNotExist(err) {

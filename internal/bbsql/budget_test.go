@@ -137,11 +137,11 @@ func newBudgetSamplers(counts budgetCounts) []*budgetSampler {
 		cap      int
 		decode   func([]Row) (any, bool, error)
 	}{
-		{"bb:requests", "requests", DemotedInterval, CapRequests, budgetDecode[[]Requests](CapRequests)},
-		{"bb:waits", "waits", BaseInterval, CapWaits, budgetDecode[[]Waits](CapWaits)},
+		{"bb:requests", "requests", BaseInterval, CapRequests, budgetDecode[[]Requests](CapRequests)},
+		{"bb:waits", "waits", DemotedInterval, CapWaits, budgetDecode[[]Waits](CapWaits)},
 		{"bb:schedulers", "schedulers", BaseInterval, CapSchedulers, budgetDecode[[]Schedulers](CapSchedulers)},
 		{"bb:semaphores", "semaphores", BaseInterval, CapSemaphores, budgetDecode[[]Semaphores](CapSemaphores)},
-		{"bb:tempdb", "tempdb", BaseInterval, CapTempdb, budgetDecode[[]Tempdb](CapTempdb)},
+		{"bb:tempdb", "tempdb", DemotedInterval, CapTempdb, budgetDecode[[]Tempdb](CapTempdb)},
 		{"bb:filestats", "filestats", DemotedInterval, CapFileStats, budgetDecode[[]FileStats](CapFileStats)},
 		{"bb:ag", "ag", DemotedInterval, CapAG, budgetDecode[[]AG](CapAG)},
 	}
@@ -464,10 +464,27 @@ func TestSQLBudgetAtCapPayload(t *testing.T) {
 			}
 		}
 	}
-	// Storage plan at this payload: every tick of the hour saturated.
-	perDay := stats.worstTick * 240 * 24
-	t.Logf("at-cap storage plan: %d B/tick -> %d B/day at 15s cadence (retention: %d hours)",
-		stats.worstTick, perDay, r.keepHours())
+	// Storage plan at this payload, each kind at its own cadence: a 60 s
+	// sampler does not write on the three ticks in between, so multiplying one
+	// all-hands worst tick by 240 would overstate the day. Each kind
+	// contributes its largest at-cap line times its own ticks per day, which is
+	// the figure the owner plans disk against.
+	perDay := 0
+	for _, sp := range samplers {
+		ticksPerDay := 240 * 24
+		if sp.interval > BaseInterval {
+			ticksPerDay = 60 * 24
+		}
+		kindMax := 0
+		for _, b := range stats.perKind[sp.kind] {
+			if b > kindMax {
+				kindMax = b
+			}
+		}
+		perDay += kindMax * ticksPerDay
+	}
+	t.Logf("at-cap storage plan: %d B/day with every kind saturated at its own cadence (worst tick %d B, retention: %d hours)",
+		perDay, stats.worstTick, r.keepHours())
 }
 
 // TestSQLBudgetWorkingSet is the C13 memory bound measured as real RSS, not as
